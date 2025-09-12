@@ -1,0 +1,383 @@
+Project 2: CI/CD & Monitoring for Apache Website
+
+Repo: https://github.com/akshu20791/apachewebsite
+
+Timebox: ~1.5 hours for demo setup
+
+1. Source & Containerization
+
+Fork the repository into your GitHub account.
+
+Create a custom Dockerfile at the root of the fork. Example:
+
+# Dockerfile for Apache website
+FROM httpd:2.4
+
+# Copy website files into Apache document root
+COPY . /usr/local/apache2/htdocs/
+
+# Expose default Apache port
+EXPOSE 80
+
+
+✅ This makes the website run directly on Apache inside a container.
+
+2. Continuous Integration (CI/CD with Jenkins)
+
+Install Jenkins on the same VM (Ubuntu recommended).
+
+Configure a Pipeline job that:
+
+Pulls code from your forked repo.
+
+Builds a Docker image (docker build -t <dockerhub-username>/apachewebsite:$BUILD_NUMBER .).
+
+Pushes the image to Docker Hub.
+
+Deploys by running the container on the same machine (stopping/removing old container first).
+
+Sample Jenkinsfile (baseline, no Kubernetes yet):
+
+pipeline {
+    agent any
+    environment {
+        IMAGE = "<dockerhub-username>/apachewebsite"
+        CREDS = "dockerhub-creds"
+        CONTAINER_NAME = "apache-website"
+    }
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+        stage('Build Image') {
+            steps {
+                sh "docker build -t ${IMAGE}:${BUILD_NUMBER} ."
+            }
+        }
+        stage('Push Image') {
+            steps {
+                withCredentials([usernamePassword(credentialsId: CREDS, usernameVariable: 'USER', passwordVariable: 'PASS')]) {
+                    sh "echo $PASS | docker login -u $USER --password-stdin"
+                    sh "docker push ${IMAGE}:${BUILD_NUMBER}"
+                    sh "docker tag ${IMAGE}:${BUILD_NUMBER} ${IMAGE}:latest"
+                    sh "docker push ${IMAGE}:latest"
+                }
+            }
+        }
+        stage('Deploy') {
+            steps {
+                sh """
+                docker rm -f ${CONTAINER_NAME} || true
+                docker run -d --name ${CONTAINER_NAME} -p 8080:80 ${IMAGE}:latest
+                """
+            }
+        }
+    }
+    post {
+        success { echo "Deployment successful: http://<VM-IP>:8080" }
+        failure { echo "Pipeline failed!" }
+    }
+}
+
+3. Deployment Target
+
+Baseline (required): Deploy with Docker on same VM (container runs on port 8080).
+
+Stretch goal (optional): Deploy on single-node Kubernetes (minikube/k3s) using a Deployment + Service manifest.
+
+4. Monitoring
+
+Install Prometheus + node-exporter + Grafana on same VM (via Docker Compose).
+
+Collect host-level metrics (CPU, RAM, disk, network) from node-exporter.
+
+Add at least one dashboard in Grafana (Node Exporter Full is recommended).
+
+docker-compose.yml for monitoring (example):
+
+version: '3.7'
+services:
+  prometheus:
+    image: prom/prometheus
+    container_name: prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+
+  node-exporter:
+    image: prom/node-exporter
+    container_name: node-exporter
+    ports:
+      - "9100:9100"
+
+  grafana:
+    image: grafana/grafana
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+
+
+prometheus.yml scrape config:
+
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: "node"
+    static_configs:
+      - targets: ["node-exporter:9100"]
+
+5. Deliverables
+
+✅ Forked repo with custom Dockerfile + Jenkinsfile
+
+✅ Jenkins pipeline configured and working
+
+✅ Docker deployment on same VM (app reachable at http://<VM-IP>:8080)
+
+✅ Monitoring stack (Prometheus + Grafana + node-exporter)
+
+✅ Grafana dashboard showing system metrics
+
+✅ Documentation (README.md) with setup, access steps, screenshots
+
+6. Acceptance Criteria
+
+Jenkins pipeline runs automatically on code push (or manual trigger).
+
+Website is containerized, deployed, and reachable on port 8080.
+
+Docker image is available in Docker Hub registry.
+
+Monitoring stack is running; Grafana shows host metrics.
+
+Documentation clearly explains setup → build → deploy → monitoring access.
+
+👉 Do you want me to prepare a ready-to-use README.md (step-by-step guide) for this project, like I did for Project 1, so you can directly attach it in your fork?
+
+You said:
+I need end to end answer from ec2 starting
+ChatGPT said:
+
+Perfect 👍 let’s build the end-to-end flow for Project 2 (Apache Website CI/CD + Monitoring) from scratch on an AWS EC2 instance.
+I’ll guide you step by step starting right from launching EC2 → Jenkins + Docker → CI/CD pipeline → Deployment → Monitoring (Prometheus + Grafana + node-exporter).
+
+🚀 Project 2: CI/CD & Monitoring for Apache Website (EC2 End-to-End)
+1. Launch EC2 Instance
+
+Instance type: t3.medium (2 vCPU, 4 GB RAM is enough for Jenkins + Docker + monitoring)
+
+AMI: Ubuntu 22.04 LTS
+
+Security group rules:
+
+22 (SSH)
+
+8080 (Apache Website)
+
+8080-9000 (Jenkins 8080, Prometheus 9090, Grafana 3000, Node Exporter 9100)
+
+30000-32767 (only if later you want Kubernetes NodePort)
+
+SSH into instance:
+
+ssh -i <your-key.pem> ubuntu@<EC2_PUBLIC_IP>
+
+2. Install Docker
+sudo apt update -y
+sudo apt install -y ca-certificates curl gnupg lsb-release
+sudo mkdir -m 0755 -p /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | \
+    sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
+  https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | \
+  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+sudo apt update -y
+sudo apt install -y docker-ce docker-ce-cli containerd.io
+sudo usermod -aG docker ubuntu
+newgrp docker
+
+
+Check:
+
+docker --version
+
+3. Install Jenkins
+sudo apt update
+sudo apt install -y openjdk-11-jdk wget gnupg
+
+wget -q -O - https://pkg.jenkins.io/debian-stable/jenkins.io.key | \
+    sudo gpg --dearmor -o /usr/share/keyrings/jenkins-keyring.gpg
+echo deb [signed-by=/usr/share/keyrings/jenkins-keyring.gpg] \
+    https://pkg.jenkins.io/debian-stable binary/ | \
+    sudo tee /etc/apt/sources.list.d/jenkins.list
+
+sudo apt update
+sudo apt install -y jenkins
+sudo systemctl enable jenkins
+sudo systemctl start jenkins
+
+
+Get admin password:
+
+sudo cat /var/lib/jenkins/secrets/initialAdminPassword
+
+
+Open Jenkins: http://<EC2_PUBLIC_IP>:8080
+
+4. Fork Website Repo + Write Dockerfile
+
+Fork https://github.com/akshu20791/apachewebsite
+ into your GitHub account.
+
+Inside your fork, create a Dockerfile:
+
+FROM httpd:2.4
+COPY . /usr/local/apache2/htdocs/
+EXPOSE 80
+
+
+Commit & push to your fork.
+
+5. Configure Docker Hub
+
+Create Docker Hub
+ account if not already.
+
+In Jenkins → Manage Jenkins → Credentials → Global → Add Credentials.
+
+Type: Username & Password
+
+ID: dockerhub-creds
+
+6. Jenkins Pipeline (CI/CD)
+
+In your fork’s root, create a Jenkinsfile:
+
+pipeline {
+    agent any
+    environment {
+        IMAGE = "dockerhub-username/apachewebsite"
+        CREDS = "dockerhub-creds"
+        CONTAINER_NAME = "apache-website"
+    }
+    stages {
+        stage('Checkout') {
+            steps { checkout scm }
+        }
+        stage('Build Image') {
+            steps { sh "docker build -t ${IMAGE}:${BUILD_NUMBER} ." }
+        }
+        stage('Push Image') {
+            steps {
+                withCredentials([usernamePassword(credentialsId: CREDS, usernameVariable: 'USER', passwordVariable: 'PASS')]) {
+                    sh "echo $PASS | docker login -u $USER --password-stdin"
+                    sh "docker push ${IMAGE}:${BUILD_NUMBER}"
+                    sh "docker tag ${IMAGE}:${BUILD_NUMBER} ${IMAGE}:latest"
+                    sh "docker push ${IMAGE}:latest"
+                }
+            }
+        }
+        stage('Deploy') {
+            steps {
+                sh """
+                  docker rm -f ${CONTAINER_NAME} || true
+                  docker run -d --name ${CONTAINER_NAME} -p 8080:80 ${IMAGE}:latest
+                """
+            }
+        }
+    }
+    post {
+        success { echo "Website running at http://<EC2_PUBLIC_IP>:8080" }
+        failure { echo "Pipeline failed!" }
+    }
+}
+
+7. Create Jenkins Job
+
+New Item → Pipeline → choose Pipeline script from SCM
+
+SCM: Git → Repo URL: https://github.com/<your-username>/apachewebsite.git
+
+Branch: */main
+
+Save → Build Now
+
+✅ After success, website available:
+
+http://<EC2_PUBLIC_IP>:8080
+
+8. Setup Monitoring (Prometheus + Node Exporter + Grafana)
+
+Create docker-compose.yml on EC2:
+
+version: '3.7'
+services:
+  prometheus:
+    image: prom/prometheus
+    container_name: prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+
+  node-exporter:
+    image: prom/node-exporter
+    container_name: node-exporter
+    ports:
+      - "9100:9100"
+
+  grafana:
+    image: grafana/grafana
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+
+
+prometheus.yml:
+
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: "node"
+    static_configs:
+      - targets: ["node-exporter:9100"]
+
+
+Run:
+
+docker compose up -d
+
+
+Access:
+
+Prometheus → http://<EC2_PUBLIC_IP>:9090
+
+Grafana → http://<EC2_PUBLIC_IP>:3000 (login: admin/admin)
+
+In Grafana → Add data source → Prometheus → URL: http://prometheus:9090.
+Import Node Exporter Full dashboard (ID 1860).
+
+9. Deliverables
+
+✅ Forked repo with Dockerfile & Jenkinsfile
+
+✅ Jenkins pipeline working
+
+✅ Website accessible via EC2 public IP:8080
+
+✅ Monitoring stack running (Prometheus + Grafana)
+
+✅ Grafana dashboard showing system metrics
