@@ -1,0 +1,276 @@
+1. Source Code
+
+Fork the repo:
+
+git clone https://github.com/akshu20791/cicdakshat.git
+cd cicdakshat
+git remote add origin https://github.com/<your-github-username>/cicdakshat.git
+git push -u origin main
+
+🔹 2. Infrastructure Setup
+Option A: Self-Managed Kubernetes on EC2
+
+Launch 2 EC2 instances (t3.medium recommended):
+
+1 master
+
+1 worker
+
+Install Docker, kubeadm, kubectl, and join the worker to the master.
+
+Option B: Managed Kubernetes (EKS – Preferred)
+eksctl create cluster --name springboot-eks --region us-east-1 --nodes 2 --node-type t3.medium
+
+
+Validate:
+
+kubectl get nodes
+
+🔹 3. Jenkins Setup
+
+Launch a separate EC2 instance for Jenkins.
+
+Install:
+
+sudo apt update
+sudo apt install openjdk-11-jdk -y
+curl -fsSL https://pkg.jenkins.io/debian/jenkins.io-2023.key | sudo tee \
+  /usr/share/keyrings/jenkins-keyring.asc > /dev/null
+echo deb [signed-by=/usr/share/keyrings/jenkins-keyring.asc] \
+  https://pkg.jenkins.io/debian binary/ | sudo tee \
+  /etc/apt/sources.list.d/jenkins.list > /dev/null
+sudo apt update
+sudo apt install jenkins -y
+sudo systemctl enable jenkins && sudo systemctl start jenkins
+
+
+Install plugins:
+
+GitHub
+
+Docker
+
+Kubernetes CLI
+
+AWS Credentials
+
+🔹 4. Containerization (Dockerfile)
+
+Create Dockerfile in project root:
+
+FROM openjdk:11-jre-slim
+WORKDIR /app
+COPY target/*.jar app.jar
+ENTRYPOINT ["java","-jar","app.jar"]
+
+
+Build & test locally:
+
+mvn clean package -DskipTests
+docker build -t sai2080/springboot-app:v1 .
+docker run -p 8080:8080 sai2080/springboot-app:v1
+
+
+Push to DockerHub:
+
+docker login -u sai2080
+docker push sai2080/springboot-app:v1
+
+🔹 5. Kubernetes Manifests
+
+Create deployment.yml:
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: springboot-app
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: springboot-app
+  template:
+    metadata:
+      labels:
+        app: springboot-app
+    spec:
+      containers:
+      - name: springboot-app
+        image: sai2080/springboot-app:v1
+        ports:
+        - containerPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: springboot-service
+spec:
+  type: LoadBalancer
+  selector:
+    app: springboot-app
+  ports:
+    - port: 80
+      targetPort: 8080
+
+
+Apply:
+
+kubectl apply -f deployment.yml
+
+
+Get LoadBalancer URL:
+
+kubectl get svc springboot-service
+
+🔹 6. CI/CD Pipeline (Jenkinsfile)
+pipeline {
+    agent any
+    environment {
+        DOCKER_USER = "sai2080"
+        DOCKER_PASS = credentials('docker-hub-cred')
+        AWS_CREDS = credentials('aws-eks-creds')
+    }
+    stages {
+        stage('Clone') {
+            steps {
+                git 'https://github.com/<your-github-username>/cicdakshat.git'
+            }
+        }
+        stage('Build Maven') {
+            steps {
+                sh 'mvn clean package -DskipTests'
+            }
+        }
+        stage('Docker Build & Push') {
+            steps {
+                sh """
+                echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin
+                docker build -t $DOCKER_USER/springboot-app:v1 .
+                docker push $DOCKER_USER/springboot-app:v1
+                """
+            }
+        }
+        stage('Deploy to EKS') {
+            steps {
+                withAWS(credentials: 'aws-eks-creds', region: 'us-east-1') {
+                    sh '''
+                        aws eks update-kubeconfig --region us-east-1 --name springboot-eks
+                        kubectl apply -f deployment.yml
+                    '''
+                }
+            }
+        }
+    }
+}
+
+🔹 7. Monitoring Setup (Prometheus + Grafana)
+
+Install monitoring stack:
+
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+helm repo update
+kubectl create namespace monitoring
+helm install monitoring prometheus-community/kube-prometheus-stack -n monitoring
+
+
+Expose Grafana:
+
+kubectl patch svc monitoring-grafana -n monitoring -p '{"spec":{"type":"LoadBalancer"}}'
+
+
+Login Grafana → import dashboards:
+
+Node Exporter (1860) for CPU, RAM, Disk, Network
+
+Kubernetes Cluster (3119)
+
+🔹 8. Alerting Rule Example
+
+Create cpu-alert.yaml:
+
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: high-cpu-usage
+  namespace: monitoring
+spec:
+  groups:
+    - name: node-alerts
+      rules:
+        - alert: HighCPUUsage
+          expr: 100 - (avg by(instance)(rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High CPU usage on {{ $labels.instance }}"
+            description: "CPU usage > 80% for 2m."
+
+
+Apply:
+
+kubectl apply -f cpu-alert.yaml
+
+🔹 9. Deliverables
+
+Forked repo (GitHub link)
+
+Dockerfile & Jenkinsfile in repo
+
+Kubernetes manifests (deployment.yml)
+
+Screenshot of app running (LoadBalancer URL)
+
+Grafana dashboard screenshot (CPU, RAM, etc.)
+
+Alerting screenshot
+
+✅ This covers Source → Infra → Jenkins CI/CD → EKS Deployment → Monitoring → Alerting → Deliverables.
+
+Do you want me to also create a Word/PDF document with all these steps nicely formatted (so you can directly upload as submission)?
+
+You said:
+How many instances do I require
+ChatGPT said:
+
+Good question 👍
+
+It depends on whether you go with self-managed Kubernetes (kubeadm) or EKS (managed by AWS). Let’s break it down:
+
+🔹 Option 1: EKS (Recommended for your project)
+
+1 EC2 instance → Jenkins server
+
+EKS cluster → AWS manages the control plane (master nodes), you only provision worker nodes.
+
+You can start with 2 worker nodes (t3.medium or higher recommended).
+
+👉 So in total:
+
+3 instances minimum (1 Jenkins + 2 worker nodes in EKS).
+
+🔹 Option 2: Self-Managed Kubernetes (kubeadm on EC2)
+
+1 EC2 instance → Master node
+
+1–2 EC2 instances → Worker nodes (to run your Spring Boot pods)
+
+1 EC2 instance → Jenkins
+
+👉 So in total:
+
+3–4 instances (1 Jenkins + 1 Master + 1 or 2 Workers).
+
+🔹 Monitoring (Prometheus & Grafana)
+
+If you use helm install kube-prometheus-stack, it will deploy inside the same Kubernetes cluster → no extra EC2 needed.
+
+✅ Final Recommendation for Wipro Project (simple, cost-saving):
+
+Use EKS (cheaper, less setup).
+
+1 Jenkins EC2 + 2 worker nodes in EKS.
+
+Monitoring stack inside EKS.
+
+That means you need 3 instances total 🚀
